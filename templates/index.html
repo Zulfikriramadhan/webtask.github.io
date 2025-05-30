@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Deteksi Bahasa Isyarat Hijaiyah</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Naskh+Arabic:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f0f4f8; /* Warna latar belakang yang lembut */
+        }
+        .arabic-text {
+            font-family: 'Noto Naskh Arabic', serif;
+            font-size: 6rem; /* Ukuran font besar untuk huruf Arab */
+            line-height: 1;
+        }
+        /* Responsif untuk ukuran font */
+        @media (max-width: 768px) {
+            .arabic-text {
+                font-size: 4rem;
+            }
+            .prediction-label {
+                font-size: 1.5rem;
+            }
+            .accuracy-text {
+                font-size: 1.1rem;
+            }
+        }
+    </style>
+</head>
+<body class="flex flex-col items-center justify-center min-h-screen p-4 bg-gradient-to-br from-blue-100 to-purple-100 text-gray-800">
+
+    <h1 class="text-4xl font-bold text-center mb-8 text-blue-800 drop-shadow-lg">
+        Deteksi Bahasa Isyarat Huruf Hijaiyah
+    </h1>
+
+    <div class="flex flex-col lg:flex-row items-center lg:items-start justify-center gap-8 w-full max-w-6xl">
+
+        <div class="relative w-full lg:w-3/5 bg-white rounded-xl shadow-2xl overflow-hidden border-4 border-blue-300">
+            <video id="webcamVideo" class="w-full h-auto transform scale-x-[-1]" autoplay playsinline></video>
+            <canvas id="handCanvas" class="absolute top-0 left-0 w-full h-full transform scale-x-[-1]"></canvas>
+            <div id="loadingMessage" class="absolute inset-0 flex items-center justify-center bg-gray-900 bg-opacity-75 text-white text-xl font-semibold">
+                Memuat kamera...
+            </div>
+        </div>
+
+        <div class="w-full lg:w-2/5 bg-white rounded-xl shadow-2xl p-6 flex flex-col items-center justify-center text-center border-4 border-purple-300">
+            <div class="mb-6">
+                <p class="text-2xl font-semibold text-gray-600 mb-2">Huruf Latin:</p>
+                <p id="predictedLabel" class="prediction-label text-5xl font-extrabold text-green-600 animate-pulse">Tidak Diketahui</p>
+            </div>
+            <div class="mb-6">
+                <p class="text-2xl font-semibold text-gray-600 mb-2">Huruf Arab:</p>
+                <p id="arabicLabel" class="arabic-text text-blue-700 font-bold">?</p>
+            </div>
+            <div>
+                <p class="text-xl font-semibold text-gray-600 mb-2">Akurasi:</p>
+                <p id="accuracyText" class="accuracy-text text-3xl font-bold text-red-500">Akurasi: -</p>
+            </div>
+        </div>
+    </div>
+
+    <p class="mt-8 text-gray-600 text-sm text-center">
+        Pastikan Anda memberikan izin akses kamera pada browser Anda.
+    </p>
+
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/hands.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/socket.io-client@4.0.0/dist/socket.io.min.js"></script>
+
+    <script type="module">
+        // Mendapatkan elemen DOM
+        const videoElement = document.getElementById('webcamVideo');
+        const canvasElement = document.getElementById('handCanvas');
+        const canvasCtx = canvasElement.getContext('2d');
+        const loadingMessage = document.getElementById('loadingMessage');
+        const predictedLabelElement = document.getElementById('predictedLabel');
+        const arabicLabelElement = document.getElementById('arabicLabel');
+        const accuracyTextElement = document.getElementById('accuracyText');
+
+        // Inisialisasi Socket.IO client
+        // Ganti dengan alamat IP server Flask Anda jika diakses dari perangkat lain
+        const socket = io('http://localhost:5000'); // Sesuaikan dengan alamat server Flask Anda
+
+        socket.on('connect', () => {
+            console.log('Terhubung ke server Socket.IO');
+        });
+
+        socket.on('disconnect', () => {
+            console.log('Terputus dari server Socket.IO');
+        });
+
+        socket.on('prediction_result', (data) => {
+            // Memperbarui UI dengan hasil prediksi dari server
+            predictedLabelElement.textContent = data.predicted_label;
+            arabicLabelElement.textContent = data.arabic_label;
+            accuracyTextElement.textContent = data.accuracy_text;
+        });
+
+        // Inisialisasi MediaPipe Hands
+        const hands = new Hands({
+            locateFile: (file) => {
+                return `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/${file}`;
+            }
+        });
+
+        hands.setOptions({
+            maxNumHands: 1, // Hanya deteksi satu tangan
+            modelComplexity: 1, // Keseimbangan antara akurasi dan kecepatan
+            minDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5
+        });
+
+        hands.onResults(onResults);
+
+        // Fungsi yang dipanggil setiap kali MediaPipe selesai memproses frame
+        function onResults(results) {
+            // Sembunyikan pesan loading setelah frame pertama diproses
+            loadingMessage.classList.add('hidden');
+
+            canvasCtx.save();
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+            canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+
+            if (results.multiHandLandmarks) {
+                for (const landmarks of results.multiHandLandmarks) {
+                    // Gambar landmark dan koneksi tangan
+                    drawConnectors(canvasCtx, landmarks, Hands.HAND_CONNECTIONS, {
+                        color: '#00FF00',
+                        lineWidth: 5
+                    });
+                    drawLandmarks(canvasCtx, landmarks, {
+                        color: '#FF0000',
+                        lineWidth: 2
+                    });
+
+                    // Ekstrak dan normalisasi data landmark (mirip dengan kode Python Anda)
+                    const x_coords = landmarks.map(lm => lm.x);
+                    const y_coords = landmarks.map(lm => lm.y);
+
+                    const min_x = Math.min(...x_coords);
+                    const min_y = Math.min(...y_coords);
+
+                    const data_aux = [];
+                    for (const lm of landmarks) {
+                        data_aux.push(lm.x - min_x);
+                        data_aux.push(lm.y - min_y);
+                    }
+
+                    // Kirim data_aux ke server melalui Socket.IO
+                    socket.emit('process_landmarks', data_aux);
+                }
+            } else {
+                // Jika tidak ada tangan terdeteksi, reset tampilan
+                predictedLabelElement.textContent = "Tidak Diketahui";
+                arabicLabelElement.textContent = "?";
+                accuracyTextElement.textContent = "Akurasi: -";
+            }
+            canvasCtx.restore();
+        }
+
+        // Mengakses webcam
+        async function setupWebcam() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                videoElement.srcObject = stream;
+
+                // Setelah video dimuat, atur ukuran canvas agar sesuai dengan video
+                videoElement.onloadedmetadata = () => {
+                    canvasElement.width = videoElement.videoWidth;
+                    canvasElement.height = videoElement.videoHeight;
+                    // Mulai mengirim frame ke MediaPipe
+                    sendToMediaPipe();
+                };
+            } catch (error) {
+                console.error("Gagal mengakses kamera:", error);
+                loadingMessage.textContent = "Gagal memuat kamera. Pastikan izin kamera diberikan.";
+                predictedLabelElement.textContent = "ERROR";
+                arabicLabelElement.textContent = "⚠️";
+                accuracyTextElement.textContent = "Mohon berikan izin kamera.";
+            }
+        }
+
+        // Fungsi untuk mengirim frame video ke MediaPipe
+        async function sendToMediaPipe() {
+            if (!videoElement.videoWidth) {
+                requestAnimationFrame(sendToMediaPipe); // Tunggu sampai video siap
+                return;
+            }
+            await hands.send({ image: videoElement });
+            requestAnimationFrame(sendToMediaPipe); // Terus kirim frame
+        }
+
+        // Panggil fungsi setupWebcam saat halaman dimuat
+        window.onload = setupWebcam;
+    </script>
+</body>
+</html>
